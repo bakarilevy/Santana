@@ -24,13 +24,27 @@ var DISCORD_TOKEN string = "YOUR_DISCORD_TOKEN_HERE"
 ```
 For this reason you will need to compile this on a device with the Go compiler installed.
 The preferred method of using this tool is as a native dynamic link library.
-In order to compile Go source code as a dynamic link library you will need to run the following command:
+In order to compile Go source code as a dynamic link library you will need to run the following commands:
+
+```
+go mod init Santana
+go mod tidy
+```
 
 ```
 go build -o <dll-name>.dll -buildmode=c-shared
+
+go build -o santana.dll -buildmode=c-shared
 ```
 
 You will substitute the dll-name variable with the name of the dll you would like to output.
+
+To run the DLL you will have to run the following command in the terminal:
+```
+rundll32.exe <dll-path>,<entry-point>
+
+rundll32.exe santana.dll,DllMain
+```
 
 ## Code Execution
 
@@ -76,6 +90,9 @@ To get the reverse shell use the commands to set the host and port in discord:
 
 You can of course check those settings running the get commands:
 ```
-get-rshell-host
-get-rshell-port
+!get-rshell-host
+!get-rshell-port
 ```
+
+## TODO
+- Add functions for Go CLR module
